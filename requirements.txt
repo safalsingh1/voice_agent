@@ -1,0 +1,6 @@
+streamlit>=1.33.0
+openai-whisper
+groq
+torch
+requests
+python-dotenv

@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Environment
+.env
+
+# IDE
+.vscode/
+.idea/
+
+# Output (keep the folder but not the generated files)
+output/*
+!output/.gitkeep
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Whisper cache
+*.pt

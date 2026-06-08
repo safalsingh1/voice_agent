@@ -8,8 +8,17 @@ and tool execution with session history.
 import os
 import streamlit as st
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
+
+# ── Security constants (configurable via .env) ────────────────────────────────
+# Maximum allowed audio file size in MB
+MAX_AUDIO_SIZE_MB: int = int(os.getenv("MAX_AUDIO_SIZE_MB", "25"))
+MAX_AUDIO_SIZE_BYTES: int = MAX_AUDIO_SIZE_MB * 1024 * 1024
+
+# Rate limiting: maximum requests per window
+RATE_LIMIT_MAX: int = int(os.getenv("RATE_LIMIT_MAX", "20"))
+RATE_LIMIT_WINDOW_SECONDS: int = int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "60"))
 
 from config import (
     WHISPER_MODELS,
@@ -90,10 +99,40 @@ def init_session_state():
         "pipeline_stt": None,
         "pipeline_intent": None,
         "show_uploader": False,
+        # Rate-limiting: track request timestamps within the sliding window
+        "rate_limit_timestamps": [],
     }
     for key, val in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = val
+
+
+# ─── Rate Limiter ─────────────────────────────────────────────────────────────
+def _check_rate_limit() -> bool:
+    """
+    Returns True if the request is allowed, False if rate limit is exceeded.
+    Uses a sliding-window approach per browser session.
+    """
+    now = datetime.now()
+    window_start = now - timedelta(seconds=RATE_LIMIT_WINDOW_SECONDS)
+
+    # Prune timestamps outside the window
+    st.session_state.rate_limit_timestamps = [
+        ts for ts in st.session_state.rate_limit_timestamps
+        if ts > window_start
+    ]
+
+    if len(st.session_state.rate_limit_timestamps) >= RATE_LIMIT_MAX:
+        return False
+
+    st.session_state.rate_limit_timestamps.append(now)
+    return True
+
+
+# ─── Audio Size Guard ─────────────────────────────────────────────────────────
+def _check_audio_size(audio_bytes: bytes) -> bool:
+    """Return True if audio is within the allowed size limit."""
+    return len(audio_bytes) <= MAX_AUDIO_SIZE_BYTES
 
 init_session_state()
 
@@ -149,7 +188,23 @@ def process_input(audio_bytes: bytes = None, text_input: str = None):
     """Process either audio or text input and kick off the STT/Intent pipeline."""
     transcript = ""
 
+    # ── Security: rate limit check ────────────────────────────────────────────
+    if not _check_rate_limit():
+        st.error(
+            f"⏱️ Rate limit reached: maximum {RATE_LIMIT_MAX} requests per "
+            f"{RATE_LIMIT_WINDOW_SECONDS} seconds. Please wait a moment."
+        )
+        return
+
     if audio_bytes:
+        # ── Security: audio size check ────────────────────────────────────────
+        if not _check_audio_size(audio_bytes):
+            size_mb = len(audio_bytes) / (1024 * 1024)
+            st.error(
+                f"🚫 Audio file is too large ({size_mb:.1f} MB). "
+                f"Maximum allowed size is {MAX_AUDIO_SIZE_MB} MB."
+            )
+            return
         with st.spinner("🔊 Transcribing audio..."):
             stt_result = transcribe_audio(audio_bytes, st.session_state.whisper_model)
         
